@@ -1,0 +1,27 @@
+{
+  "name": "maylog-activity-api-railway",
+  "version": "1.0.0",
+  "description": "Activity API for mayLOG Discord bot - Railway deployment",
+  "main": "api-server.js",
+  "scripts": {
+    "start": "node api-server.js",
+    "dev": "nodemon api-server.js"
+  },
+  "keywords": ["activity", "api", "roblox", "discord", "maylog", "bot", "railway"],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "dotenv": "^16.3.1",
+    "express-rate-limit": "^7.1.5",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
