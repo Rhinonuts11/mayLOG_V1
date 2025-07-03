@@ -3,15 +3,14 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
-require('dotenv').config();
+const config = require('./config');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
 // Security middleware
 app.use(helmet());
 app.use(cors({
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+    origin: config.cors.allowedOrigins,
     credentials: true
 }));
 
@@ -32,8 +31,6 @@ app.use(express.urlencoded({ extended: true }));
 
 // In-memory storage for servers and players
 const servers = new Map();
-const CLEANUP_INTERVAL = 30000; // 30 seconds
-const SERVER_TIMEOUT = 60000; // 1 minute
 
 // Authentication middleware
 const authenticateToken = (req, res, next) => {
@@ -44,7 +41,10 @@ const authenticateToken = (req, res, next) => {
         return res.status(401).json({ error: 'Access token required' });
     }
 
-    if (token !== process.env.ACTIVITY_TOKEN) {
+    // Support both ACTIVITY_TOKEN and ACTIVITY_RELAY_API_KEY for compatibility
+    const validTokens = [config.activityToken, config.relayApiKey].filter(Boolean);
+    
+    if (!validTokens.includes(token)) {
         return res.status(403).json({ error: 'Invalid access token' });
     }
 
@@ -55,12 +55,12 @@ const authenticateToken = (req, res, next) => {
 setInterval(() => {
     const now = Date.now();
     for (const [serverId, server] of servers.entries()) {
-        if (now - server.lastKeepAlivePing > SERVER_TIMEOUT) {
+        if (now - server.lastKeepAlivePing > config.activity.serverTimeout) {
             console.log(`Removing inactive server: ${serverId}`);
             servers.delete(serverId);
         }
     }
-}, CLEANUP_INTERVAL);
+}, config.activity.cleanupInterval);
 
 // Routes
 
@@ -69,17 +69,19 @@ app.get('/health', (req, res) => {
     res.json({ 
         status: 'healthy', 
         timestamp: new Date().toISOString(),
-        servers: servers.size
+        servers: servers.size,
+        environment: config.nodeEnv,
+        version: '1.0.0'
     });
 });
 
-// Get all servers
+// Get all servers - matches the original mayLOG API interface
 app.get('/v1/maylog-activity/servers', authenticateToken, (req, res) => {
     const serverList = Array.from(servers.values());
     res.json({ servers: serverList });
 });
 
-// Get specific server
+// Get specific server - matches the original mayLOG API interface
 app.get('/v1/maylog-activity/:serverId', authenticateToken, (req, res) => {
     const { serverId } = req.params;
     const server = servers.get(serverId);
@@ -91,12 +93,15 @@ app.get('/v1/maylog-activity/:serverId', authenticateToken, (req, res) => {
     res.json(server);
 });
 
-// Create or update server (from Roblox)
+// Create or update server (from Roblox) - matches the original relay endpoint
 app.post('/v1/maylog-activity/servers/relay/create', (req, res) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
 
-    if (!token || token !== process.env.ACTIVITY_TOKEN) {
+    // Support both tokens for compatibility
+    const validTokens = [config.activityToken, config.relayApiKey].filter(Boolean);
+    
+    if (!token || !validTokens.includes(token)) {
         return res.status(403).json({ error: 'Invalid access token' });
     }
 
@@ -128,7 +133,7 @@ app.post('/v1/maylog-activity/servers/relay/create', (req, res) => {
 
     servers.set(serverId, serverData);
 
-    console.log(`Server ${serverId} updated with ${players.length} players`);
+    console.log(`[${new Date().toISOString()}] Server ${serverId} updated with ${players.length} players`);
     
     res.json({ 
         success: true, 
@@ -143,13 +148,14 @@ app.delete('/v1/maylog-activity/servers/:serverId', authenticateToken, (req, res
     const { serverId } = req.params;
     
     if (servers.delete(serverId)) {
+        console.log(`[${new Date().toISOString()}] Server ${serverId} deleted`);
         res.json({ success: true, message: 'Server deleted successfully' });
     } else {
         res.status(404).json({ error: 'Server not found' });
     }
 });
 
-// Get player's current server
+// Get player's current server - this is what the mayLOG bot uses to check if a player is in-game
 app.get('/v1/maylog-activity/player/:userId', authenticateToken, (req, res) => {
     const userId = parseInt(req.params.userId);
     
@@ -171,12 +177,46 @@ app.get('/v1/maylog-activity/player/:userId', authenticateToken, (req, res) => {
         }
     }
 
-    res.status(404).json({ error: 'Player not found in any server' });
+    // Return null/void when player not found (matches original API behavior)
+    res.status(404).json(null);
+});
+
+// Additional endpoint for Discord bot integration - get all active players
+app.get('/v1/maylog-activity/players', authenticateToken, (req, res) => {
+    const allPlayers = [];
+    
+    for (const server of servers.values()) {
+        for (const player of server.players) {
+            allPlayers.push({
+                ...player,
+                serverId: server.serverId,
+                serverRegisteredAt: server.registeredAt
+            });
+        }
+    }
+    
+    res.json({ players: allPlayers });
+});
+
+// Stats endpoint for monitoring
+app.get('/v1/maylog-activity/stats', authenticateToken, (req, res) => {
+    const stats = {
+        totalServers: servers.size,
+        totalPlayers: Array.from(servers.values()).reduce((sum, server) => sum + server.players.length, 0),
+        serverDetails: Array.from(servers.values()).map(server => ({
+            serverId: server.serverId,
+            playerCount: server.players.length,
+            lastUpdate: server.lastKeepAlivePing,
+            uptime: Date.now() - server.registeredAt
+        }))
+    };
+    
+    res.json(stats);
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-    console.error('Error:', err);
+    console.error('[ERROR]', err);
     res.status(500).json({ error: 'Internal server error' });
 });
 
@@ -185,10 +225,18 @@ app.use((req, res) => {
     res.status(404).json({ error: 'Endpoint not found' });
 });
 
-app.listen(PORT, () => {
-    console.log(`Activity API server running on port ${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV}`);
-    console.log(`Health check available at: http://localhost:${PORT}/health`);
+app.listen(config.port, () => {
+    console.log(`[${new Date().toISOString()}] Activity API server running on port ${config.port}`);
+    console.log(`Environment: ${config.nodeEnv}`);
+    console.log(`Health check available at: http://localhost:${config.port}/health`);
+    console.log(`Discord integration: ${config.discord.isProduction ? 'Production' : 'Development'} mode`);
+    
+    if (config.discord.isProduction && !config.discord.productionToken) {
+        console.warn('WARNING: Production mode but no production Discord token configured');
+    }
+    if (!config.discord.isProduction && !config.discord.developmentToken) {
+        console.warn('WARNING: Development mode but no development Discord token configured');
+    }
 });
 
 module.exports = app;

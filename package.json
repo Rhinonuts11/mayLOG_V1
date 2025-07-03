@@ -1,14 +1,17 @@
 {
   "name": "maylog-activity-api",
   "version": "1.0.0",
-  "description": "Activity API for mayLOG bot integration",
+  "description": "Activity API for mayLOG Discord bot integration",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint src/",
+    "docker:build": "docker build -t maylog-activity-api .",
+    "docker:run": "docker run -p 3000:3000 --env-file .env maylog-activity-api"
   },
-  "keywords": ["activity", "api", "roblox", "discord"],
+  "keywords": ["activity", "api", "roblox", "discord", "maylog", "bot"],
   "author": "Your Name",
   "license": "MIT",
   "dependencies": {
@@ -20,6 +23,10 @@
     "morgan": "^1.10.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.0.2",
+    "eslint": "^8.55.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }

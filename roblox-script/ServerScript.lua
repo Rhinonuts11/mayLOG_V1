@@ -1,54 +1,64 @@
 -- Place this script in ServerScriptService
--- This script handles server registration and player tracking
+-- This script handles server registration and player tracking for mayLOG Discord bot
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Teams = game:GetService("Teams")
 
--- Configuration
+-- Configuration - UPDATE THESE VALUES
 local API_BASE_URL = "https://your-api-domain.com" -- Replace with your actual API URL
-local API_TOKEN = "your_secure_token_here" -- Replace with your actual token
-local UPDATE_INTERVAL = 30 -- seconds
+local API_TOKEN = "your_secure_token_here" -- Replace with your ACTIVITY_TOKEN from .env
+local UPDATE_INTERVAL = 30 -- seconds (matches mayLOG bot expectations)
 local MAX_RETRIES = 3
 
 -- State
 local isRunning = false
 local lastUpdate = 0
 local retryCount = 0
+local playersCache = {}
 
 -- Get server ID (unique identifier for this server instance)
 local function getServerId()
     return game.JobId
 end
 
--- Get player's team name
+-- Get player's team name (matches mayLOG bot team checking)
 local function getPlayerTeam(player)
     if player.Team then
         return player.Team.Name
     end
-    return "No Team"
+    return "Citizen" -- Default team name that mayLOG recognizes
 end
 
--- Get all current players data
+-- Get all current players data (format matches mayLOG expectations)
 local function getCurrentPlayersData()
     local playersData = {}
     
     for _, player in pairs(Players:GetPlayers()) do
         if player.UserId > 0 then -- Exclude guests/invalid users
-            table.insert(playersData, {
+            local playerData = {
                 name = player.Name,
                 userId = player.UserId,
                 team = getPlayerTeam(player),
-                joinedAt = os.time() * 1000 -- Convert to milliseconds
-            })
+                joinedAt = playersCache[player.UserId] or (os.time() * 1000) -- Preserve join time
+            }
+            
+            -- Cache join time for this player
+            if not playersCache[player.UserId] then
+                playersCache[player.UserId] = playerData.joinedAt
+            else
+                playerData.joinedAt = playersCache[player.UserId]
+            end
+            
+            table.insert(playersData, playerData)
         end
     end
     
     return playersData
 end
 
--- Send data to API
+-- Send data to API (matches mayLOG relay endpoint)
 local function sendServerData()
     local success, result = pcall(function()
         local playersData = getCurrentPlayersData()
@@ -72,17 +82,17 @@ local function sendServerData()
         
         if response.Success and response.StatusCode == 200 then
             local responseData = HttpService:JSONDecode(response.Body)
-            print("[Activity API] Server data sent successfully:", responseData.message)
+            print("[mayLOG Activity] Server data sent successfully:", responseData.message or "OK")
             retryCount = 0
             return true
         else
-            warn("[Activity API] Failed to send data. Status:", response.StatusCode, "Body:", response.Body)
+            warn("[mayLOG Activity] Failed to send data. Status:", response.StatusCode, "Body:", response.Body)
             return false
         end
     end)
     
     if not success then
-        warn("[Activity API] Error sending server data:", result)
+        warn("[mayLOG Activity] Error sending server data:", result)
         return false
     end
     
@@ -105,7 +115,7 @@ local function updateLoop()
         else
             retryCount = retryCount + 1
             if retryCount >= MAX_RETRIES then
-                warn("[Activity API] Max retries reached. Waiting for next cycle.")
+                warn("[mayLOG Activity] Max retries reached. Waiting for next cycle.")
                 lastUpdate = currentTime -- Reset timer even on failure
                 retryCount = 0
             else
@@ -119,11 +129,14 @@ end
 -- Start the activity tracking
 local function startActivityTracking()
     if isRunning then
-        warn("[Activity API] Activity tracking is already running")
+        warn("[mayLOG Activity] Activity tracking is already running")
         return
     end
     
-    print("[Activity API] Starting activity tracking for server:", getServerId())
+    print("[mayLOG Activity] Starting activity tracking for server:", getServerId())
+    print("[mayLOG Activity] API Endpoint:", API_BASE_URL)
+    print("[mayLOG Activity] Update Interval:", UPDATE_INTERVAL, "seconds")
+    
     isRunning = true
     lastUpdate = 0 -- Force immediate first update
     
@@ -143,13 +156,17 @@ local function stopActivityTracking()
         return
     end
     
-    print("[Activity API] Stopping activity tracking")
+    print("[mayLOG Activity] Stopping activity tracking")
     isRunning = false
 end
 
 -- Event handlers
 Players.PlayerAdded:Connect(function(player)
-    print("[Activity API] Player joined:", player.Name)
+    print("[mayLOG Activity] Player joined:", player.Name, "(" .. player.UserId .. ")")
+    
+    -- Cache join time
+    playersCache[player.UserId] = os.time() * 1000
+    
     -- Send update when player joins (with small delay)
     spawn(function()
         wait(1)
@@ -160,7 +177,11 @@ Players.PlayerAdded:Connect(function(player)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-    print("[Activity API] Player leaving:", player.Name)
+    print("[mayLOG Activity] Player leaving:", player.Name, "(" .. player.UserId .. ")")
+    
+    -- Remove from cache
+    playersCache[player.UserId] = nil
+    
     -- Send update when player leaves
     spawn(function()
         wait(1)
@@ -170,10 +191,12 @@ Players.PlayerRemoving:Connect(function(player)
     end)
 end)
 
--- Handle team changes
+-- Handle team changes (important for mayLOG activity tracking)
 local function onPlayerTeamChanged(player)
-    print("[Activity API] Player team changed:", player.Name, "->", getPlayerTeam(player))
-    -- Send update when team changes
+    local teamName = getPlayerTeam(player)
+    print("[mayLOG Activity] Player team changed:", player.Name, "->", teamName)
+    
+    -- Send update when team changes (mayLOG needs this for activity validation)
     spawn(function()
         wait(0.5)
         if isRunning then
@@ -184,20 +207,26 @@ end
 
 -- Connect team change events for existing players
 for _, player in pairs(Players:GetPlayers()) do
-    player:GetPropertyChangedSignal("Team"):Connect(function()
-        onPlayerTeamChanged(player)
-    end)
+    if player.UserId > 0 then
+        playersCache[player.UserId] = os.time() * 1000
+        player:GetPropertyChangedSignal("Team"):Connect(function()
+            onPlayerTeamChanged(player)
+        end)
+    end
 end
 
 -- Connect team change events for new players
 Players.PlayerAdded:Connect(function(player)
-    player:GetPropertyChangedSignal("Team"):Connect(function()
-        onPlayerTeamChanged(player)
-    end)
+    if player.UserId > 0 then
+        player:GetPropertyChangedSignal("Team"):Connect(function()
+            onPlayerTeamChanged(player)
+        end)
+    end
 end)
 
 -- Cleanup on server shutdown
 game:BindToClose(function()
+    print("[mayLOG Activity] Server shutting down, stopping activity tracking")
     stopActivityTracking()
     wait(1) -- Give time for final cleanup
 end)
@@ -206,12 +235,28 @@ end)
 startActivityTracking()
 
 -- Expose functions globally for manual control if needed
-_G.ActivityAPI = {
+_G.MayLOGActivity = {
     start = startActivityTracking,
     stop = stopActivityTracking,
     sendData = sendServerData,
     getServerId = getServerId,
-    isRunning = function() return isRunning end
+    isRunning = function() return isRunning end,
+    getPlayers = getCurrentPlayersData,
+    config = {
+        apiUrl = API_BASE_URL,
+        updateInterval = UPDATE_INTERVAL,
+        hasToken = API_TOKEN ~= "your_secure_token_here"
+    }
 }
 
-print("[Activity API] Script loaded successfully")
+print("[mayLOG Activity] Script loaded successfully")
+print("[mayLOG Activity] Use _G.MayLOGActivity for manual control")
+
+-- Validation warnings
+if API_TOKEN == "your_secure_token_here" then
+    warn("[mayLOG Activity] WARNING: Please update API_TOKEN in the script!")
+end
+
+if API_BASE_URL == "https://your-api-domain.com" then
+    warn("[mayLOG Activity] WARNING: Please update API_BASE_URL in the script!")
+end
