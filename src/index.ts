@@ -56,12 +56,24 @@ Logger.setLevel(Logger.TRACE);
 async function dbConnect(): Promise<void> {
     try {
         console.log('Connecting to MongoDB...');
+        console.log('MongoDB URI:', process.env.MONGO_URI ? 'Set' : 'Not set');
+        
         await mongo.connect();
         console.log('MongoDB connected successfully');
         
+        // Test the connection
+        await mongo.db('maylog').admin().ping();
+        console.log('MongoDB ping successful');
+        
         console.log('Connecting to Redis...');
+        console.log('Redis URL:', process.env.REDIS_URL ? 'Set' : 'Not set');
+        
         await redis.connect();
         console.log('Redis connected successfully');
+        
+        // Test Redis connection
+        await redis.ping();
+        console.log('Redis ping successful');
         
         redis.on('error', (error: Error) => {
             if (error.message.includes('ECONNRESET')) return;
@@ -77,7 +89,8 @@ async function dbConnect(): Promise<void> {
         });
         
     } catch (error) {
-        console.error(`[${Errors.Connection.Mongo}]: Failed to connect to database:`, error);
+        console.error(`Failed to connect to database:`, error);
+        console.error('Error details:', error);
         throw error; // Re-throw to be caught by main function
     }
 
@@ -97,9 +110,17 @@ async function dbConnect(): Promise<void> {
     const log = (message: string) => console.log(`${chalk.green('[INFO]')}: ${message}.`);
     
     try {
+        console.log('Starting bot initialization...');
         log(`Connecting to database...`);
+        
         await dbConnect();
         log('Connected to database. Logging into Discord...');
+        
+        console.log('Environment check:');
+        console.log('- isProduction:', Constants.isProduction);
+        console.log('- Token available:', Constants.isProduction ? 
+            (process.env.DISCORD_PRODUCTION_TOKEN ? 'Yes' : 'No') : 
+            (process.env.DISCORD_DEVELOPMENT_TOKEN ? 'Yes' : 'No'));
 
         class GuildNotification {
             client: GClient;
@@ -164,12 +185,19 @@ async function dbConnect(): Promise<void> {
             }
         }
 
+        console.log('Attempting Discord login...');
         await client.login(Constants.isProduction ? process.env.DISCORD_PRODUCTION_TOKEN : process.env.DISCORD_DEVELOPMENT_TOKEN)
-            .then(() => log('Logged into Discord. Awaiting ready...'))
+            .then(() => {
+                log('Logged into Discord. Awaiting ready...');
+                console.log('Login successful, waiting for ready event...');
+            })
             .catch((error) => {
                 console.error(`[${Errors.Connection.Discord}]: Failed to log into Discord:`, error);
+                console.error('Login error details:', error.message);
                 process.exit(1); // Exit with error code instead of continuing
             });
+
+        console.log('Setting up event listeners...');
 
         client.on('ready', () => {
             log(`Logged into Discord as ${client.user!.tag} (${client.user!.id})`);
