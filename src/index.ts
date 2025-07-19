@@ -49,7 +49,6 @@ async function dbConnect(): Promise<void> {
         });        
     } catch (error) {
         console.log(`[${Errors.Connection.Mongo}]: Failed to connect to MongoDB: ${error}`);
-        process.exit();
     }
 
     setInterval(() => {
