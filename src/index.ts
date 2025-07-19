@@ -16,14 +16,11 @@ import Redis from 'ioredis';
 dotenv.config();
 
 const mongo = new MongoClient(process.env.MONGO_URI as string, { tlsCAFile: 'certificates/mongodb-maylog.crt' });
-const redis = new Redis({
-    host: process.env.REDIS_HOST as string,
-    port: 6379,
-    password: process.env.REDIS_PASSWORD as string,
+const redis = new Redis(process.env.REDIS_URL as string, {
     lazyConnect: true,
     reconnectOnError: (error) => {
         console.log(`[${Errors.Connection.Redis}]: Failed to connect to Redis; ${error}`);
-        return true
+        return true;
     }
 });
 const activityManager = new ActivityManager(mongo, redis);
