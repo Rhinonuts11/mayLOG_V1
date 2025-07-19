@@ -46,10 +46,11 @@ async function dbConnect(): Promise<void> {
     try {
         await mongo.connect();
         await redis.connect();
-        redis.on('error', error => {
-            if (typeof error === 'string' && error.search('ECONNRESET') !== -1) return;
-            console.log(`Redis error: ${error}`)
-        });
+       redis.on('error', (error: Error) => {
+    if (error.message.includes('ECONNRESET')) return;
+    console.log(`Redis error:`, error);
+});
+
     } catch (error) {
         console.log(`[${Errors.Connection.Mongo}]: Failed to connect to MongoDB: ${error}`);
         process.exit();
