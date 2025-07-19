@@ -34,7 +34,7 @@ const mongo = new MongoClient(process.env.MONGO_URI as string, {
     socketTimeoutMS: 10000,
 });
 
-const redis = new Redis(process.env.REDIS_URL as string);
+const redis = new redis(process.env.REDIS_URL as string);
 const activityManager = new ActivityManager(mongo, redis);
 
 const client = new GClient({
