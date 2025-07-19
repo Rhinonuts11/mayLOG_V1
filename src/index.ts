@@ -34,9 +34,9 @@ requiredEnvVars.forEach(varName => {
 });
 
 const mongo = new MongoClient(process.env.MONGO_URI as string, {
-    serverSelectionTimeoutMS: 5000,
-    connectTimeoutMS: 10000,
-    socketTimeoutMS: 10000,
+    serverSelectionTimeoutMS: 10000,
+    connectTimeoutMS: 20000, 
+    socketTimeoutMS: 20000, 
 });
 
 const redis = new Redis(process.env.REDIS_URL as string);
