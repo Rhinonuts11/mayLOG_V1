@@ -34,17 +34,7 @@ const mongo = new MongoClient(process.env.MONGO_URI as string, {
     connectTimeoutMS: 10000, // 10 second timeout
     socketTimeoutMS: 10000,
 });
-const redis = new Redis(process.env.REDIS_URL as string, {
-    lazyConnect: true,
-    connectTimeout: 5000, // 5 second timeout
-    commandTimeout: 5000,
-    retryDelayOnFailover: 100,
-    maxRetriesPerRequest: 3,
-    reconnectOnError: (error) => {
-        console.log(`[${Errors.Connection.Redis}]: Failed to connect to Redis; ${error}`);
-        return true;
-    }
-});
+const redis = new Redis(process.env.REDIS_URL as string);
 const activityManager = new ActivityManager(mongo, redis);
 const client = new GClient({
     dirs: [
