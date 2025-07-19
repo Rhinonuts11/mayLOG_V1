@@ -6,7 +6,7 @@ import { GuildMember, MessageEmbed, TextChannel } from 'discord.js';
 import { MongoClient, ObjectId, UpdateResult } from 'mongodb';
 import { Redis } from 'ioredis';
 import * as Sentry from '@sentry/node';
-import ActivityAPI from './ActivityAPIAPI';
+import ActivityAPI from './ActivityAPI';
 import Constants from './Constants';
 
 interface IResult {
