@@ -33,7 +33,7 @@ requiredEnvVars.forEach(varName => {
     }
 });
 
-const mongo = new MongoClient(process.env.MONGO_URI as string, { tlsCAFile: 'certificates/mongodb-maylog.crt' });
+const mongo = new MongoClient(process.env.MONGO_URI as string);
 
 const redis = new Redis(process.env.REDIS_URL as string);
 const activityManager = new ActivityManager(mongo, redis);
