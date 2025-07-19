@@ -33,11 +33,7 @@ requiredEnvVars.forEach(varName => {
     }
 });
 
-const mongo = new MongoClient(process.env.MONGO_URI as string, {
-    serverSelectionTimeoutMS: 10000,
-    connectTimeoutMS: 20000, 
-    socketTimeoutMS: 20000, 
-});
+const mongo = new MongoClient(process.env.MONGO_URI as string, { tlsCAFile: 'certificates/mongodb-maylog.crt' });
 
 const redis = new Redis(process.env.REDIS_URL as string);
 const activityManager = new ActivityManager(mongo, redis);
