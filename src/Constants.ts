@@ -11,7 +11,7 @@ export default {
     /** Re-archive members every period (ms)*/
     userRefreshMs: 3600 * 6 * 1000,
     /** Activity endpoint */
-    Activity_Endpoint: `${ENDPOINT_PREFIX}/v1/maylog-activity/servers/relay/create`,
+    Activity_Endpoint: process.env.ACTIVITY_API_URL ? `${process.env.ACTIVITY_API_URL}/v1/maylog-activity/servers/relay/create` : `${ENDPOINT_PREFIX}/v1/maylog-activity/servers/relay/create`,
     /** The Discord User ID for the RoVer bot. */
     RoVer_Bot_ID: '298796807323123712',
     /**
