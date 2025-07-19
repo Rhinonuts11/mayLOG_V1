@@ -4,7 +4,6 @@ import { Errors } from './Enums';
 import { GClient, Logger, MessageEmbed } from 'gcommands';
 import { Guild, GuildTextBasedChannel } from 'discord.js';
 import { GuildData } from './global';
-import Redis from 'ioredis';
 import { join } from 'path';
 import { MongoClient } from 'mongodb';
 import { oneLine } from 'common-tags';
@@ -12,8 +11,13 @@ import * as Sentry from '@sentry/node';
 import chalk from 'chalk';
 import Constants from './Constants';
 import dotenv from 'dotenv';
+import ActivityAPI from './ActivityAPI'; // Ensure this import is correct
+import Redis from 'ioredis';
 
 dotenv.config();
+
+// Define the type for color keys
+type ColorKey = "mayLOG" | "red" | "pink" | "maroon" | "coral" | "blue" | "dodgerBlue" | "lightBlue" | "steelBlue" | "deepOrange" | "green" | "limeGreen" | "darkAqua" | "lightGreen" | "darkGreen" | "black" | "discordSuccess";
 
 // Check required environment variables
 const requiredEnvVars = [
@@ -123,13 +127,14 @@ class GuildNotification {
     }
 
     setType(type: 'CREATE' | 'DELETE' | 'DELETE_BLACKLIST' | 'DELETE_ROVER') {
-        const colorMap = {
+        const colorMap: Record<string, ColorKey> = {
             'CREATE': 'green',
             'DELETE': 'red',
             'DELETE_BLACKLIST': 'black',
             'DELETE_ROVER': 'red'
         };
-        const descriptionMap = {
+
+        const descriptionMap: Record<string, string> = {
             'CREATE': 'A guild has been created.',
             'DELETE': 'A guild has been deleted.',
             'DELETE_BLACKLIST': 'A **blacklisted** guild has been deleted.',
@@ -282,7 +287,7 @@ class GuildNotification {
                         const cycle = await activityManager.createCycle(guild, true);
                         await activityManager.submitCycle(cycle);
                     } catch (error) {
-                        if (['DATE_ERROR', 'ACTIVITY_NOT_ENABLED', 'INVALID_CYCLE'].includes(error)) return;
+                        if (typeof error === 'string' && ['DATE_ERROR', 'ACTIVITY_NOT_ENABLED', 'INVALID_CYCLE'].includes(error)) return;
                         console.error('Error in guild activity cycle:', error);
                         Sentry.captureException(error);
                     }
