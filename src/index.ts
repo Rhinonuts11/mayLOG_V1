@@ -15,7 +15,7 @@ import ActivityAPI from './ActivityAPI';
 import Redis from 'ioredis';
 dotenv.config();
 
-const mongo = new MongoClient(process.env.MONGO_URI as string, { tlsCAFile: 'certificates/mongodb-maylog.crt' });
+const mongo = new MongoClient(process.env.MONGO_URI as string);
 const redis = new Redis(process.env.REDIS_URL as string, {
     lazyConnect: true,
     reconnectOnError: (error) => {
