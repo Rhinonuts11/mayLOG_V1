@@ -4,11 +4,21 @@
   "description": "A department logging bot.",
   "main": "out/src/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "concurrently \"npm run start:bot\" \"npm run start:api\"",
+    "start:bot": "node out/src/index.js",
+    "start:api": "node activity-api/server.js",
+    "build": "tsc",
+    "dev": "concurrently \"npm run dev:bot\" \"npm run dev:api\"",
+    "dev:bot": "tsc && node out/src/index.js",
+    "dev:api": "nodemon activity-api/server.js",
+    "postinstall": "cd activity-api && npm install"
   },
   "devDependencies": {
     "@types/node": "^18.15.11",
+    "concurrently": "^9.2.0",
     "gts": "^3.1.1",
+    "nodemon": "^3.1.10",
     "typescript": "^5.0.4"
   },
   "keywords": [],

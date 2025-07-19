@@ -1,10 +1,39 @@
 This repository holds maylog V1. The README is the (at the time) documentation for mayLOG. Some elements of the bot have been removed.
 You are free to mess around with the project as you wish lol. Just follow the license guidelines.
 
+## Quick Start
 
+1. **Install dependencies:**
+   ```bash
+   npm install
+   ```
 
+2. **Configure environment:**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your configuration
+   ```
 
+3. **Build and start everything:**
+   ```bash
+   npm run build
+   npm start
+   ```
 
+4. **For development (with auto-reload):**
+   ```bash
+   npm run dev
+   ```
+
+## Available Scripts
+
+- `npm start` - Start both the bot and API in production mode
+- `npm run dev` - Start both with auto-reload for development
+- `npm run build` - Build the TypeScript bot code
+- `npm run start:bot` - Start only the bot
+- `npm run start:api` - Start only the API
+
+The bot will run on the configured Discord token, and the Activity API will run on `http://localhost:10001`.
 
 ---------------
 
