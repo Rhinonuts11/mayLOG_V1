@@ -29,9 +29,17 @@ requiredEnvVars.forEach(varName => {
     }
 });
 
-const mongo = new MongoClient(process.env.MONGO_URI as string);
+const mongo = new MongoClient(process.env.MONGO_URI as string, {
+    serverSelectionTimeoutMS: 5000, // 5 second timeout
+    connectTimeoutMS: 10000, // 10 second timeout
+    socketTimeoutMS: 10000,
+});
 const redis = new Redis(process.env.REDIS_URL as string, {
     lazyConnect: true,
+    connectTimeout: 5000, // 5 second timeout
+    commandTimeout: 5000,
+    retryDelayOnFailover: 100,
+    maxRetriesPerRequest: 3,
     reconnectOnError: (error) => {
         console.log(`[${Errors.Connection.Redis}]: Failed to connect to Redis; ${error}`);
         return true;
@@ -58,7 +66,13 @@ async function dbConnect(): Promise<void> {
         console.log('Connecting to MongoDB...');
         console.log('MongoDB URI:', process.env.MONGO_URI ? 'Set' : 'Not set');
         
-        await mongo.connect();
+        // Add timeout wrapper for MongoDB connection
+        const mongoConnectPromise = mongo.connect();
+        const mongoTimeout = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('MongoDB connection timeout')), 10000)
+        );
+        
+        await Promise.race([mongoConnectPromise, mongoTimeout]);
         console.log('MongoDB connected successfully');
         
         // Test the connection
@@ -68,7 +82,13 @@ async function dbConnect(): Promise<void> {
         console.log('Connecting to Redis...');
         console.log('Redis URL:', process.env.REDIS_URL ? 'Set' : 'Not set');
         
-        await redis.connect();
+        // Add timeout wrapper for Redis connection
+        const redisConnectPromise = redis.connect();
+        const redisTimeout = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Redis connection timeout')), 10000)
+        );
+        
+        await Promise.race([redisConnectPromise, redisTimeout]);
         console.log('Redis connected successfully');
         
         // Test Redis connection
@@ -91,6 +111,19 @@ async function dbConnect(): Promise<void> {
     } catch (error) {
         console.error(`Failed to connect to database:`, error);
         console.error('Error details:', error);
+        
+        // Check if MongoDB/Redis services are running
+        if (error instanceof Error) {
+            if (error.message.includes('timeout') || error.message.includes('ECONNREFUSED')) {
+                console.error('');
+                console.error('🚨 DATABASE CONNECTION FAILED:');
+                console.error('Make sure MongoDB and Redis are running:');
+                console.error('  MongoDB: mongosh (to test connection)');
+                console.error('  Redis: redis-cli ping (should return PONG)');
+                console.error('');
+            }
+        }
+        
         throw error; // Re-throw to be caught by main function
     }
 
