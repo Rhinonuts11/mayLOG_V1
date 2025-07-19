@@ -4,6 +4,7 @@ import { Errors } from './Enums';
 import { GClient, Logger, MessageEmbed } from 'gcommands';
 import { Guild, GuildTextBasedChannel } from 'discord.js';
 import { GuildData } from './global';
+import Redis from 'ioredis';
 import { join } from 'path';
 import { MongoClient } from 'mongodb';
 import { oneLine } from 'common-tags';
@@ -34,7 +35,7 @@ const mongo = new MongoClient(process.env.MONGO_URI as string, {
     socketTimeoutMS: 10000,
 });
 
-const redis = new redis(process.env.REDIS_URL as string);
+const redis = new Redis(process.env.REDIS_URL as string);
 const activityManager = new ActivityManager(mongo, redis);
 
 const client = new GClient({
