@@ -15,6 +15,20 @@ import ActivityAPI from './ActivityAPI';
 import Redis from 'ioredis';
 dotenv.config();
 
+// Check required environment variables
+const requiredEnvVars = [
+    'MONGO_URI',
+    'REDIS_URL',
+    Constants.isProduction ? 'DISCORD_PRODUCTION_TOKEN' : 'DISCORD_DEVELOPMENT_TOKEN'
+];
+
+requiredEnvVars.forEach(varName => {
+    if (!process.env[varName]) {
+        console.error(`Missing required environment variable: ${varName}`);
+        process.exit(1);
+    }
+});
+
 const mongo = new MongoClient(process.env.MONGO_URI as string);
 const redis = new Redis(process.env.REDIS_URL as string, {
     lazyConnect: true,
@@ -41,20 +55,39 @@ Logger.setLevel(Logger.TRACE);
 
 async function dbConnect(): Promise<void> {
     try {
+        console.log('Connecting to MongoDB...');
         await mongo.connect();
+        console.log('MongoDB connected successfully');
+        
+        console.log('Connecting to Redis...');
         await redis.connect();
+        console.log('Redis connected successfully');
+        
         redis.on('error', (error: Error) => {
             if (error.message.includes('ECONNRESET')) return;
             console.log(`Redis error:`, error);
-        });        
+        });
+
+        redis.on('connect', () => {
+            console.log('Redis reconnected');
+        });
+
+        redis.on('close', () => {
+            console.log('Redis connection closed');
+        });
+        
     } catch (error) {
-        console.log(`[${Errors.Connection.Mongo}]: Failed to connect to MongoDB: ${error}`);
+        console.error(`[${Errors.Connection.Mongo}]: Failed to connect to database:`, error);
+        throw error; // Re-throw to be caught by main function
     }
 
+    // Keep the ping interval
     setInterval(() => {
         try {
             redis.ping();
-        } catch {}
+        } catch (error) {
+            console.log('Redis ping failed:', error);
+        }
     }, 15000);
 
     return Promise.resolve();
@@ -62,194 +95,232 @@ async function dbConnect(): Promise<void> {
 
 (async () => {
     const log = (message: string) => console.log(`${chalk.green('[INFO]')}: ${message}.`);
-    log(`Connecting to database...`);
-    await dbConnect();
-    log('Connected to database. Logging into Discord...');
-
-    class GuildNotification {
-        client: GClient;
-        guild: Guild;
-        embed: MessageEmbed;
-        constructor(client: GClient, guild: Guild) {
-            this.client = client;
-            this.guild = guild;
-            this.embed = new MessageEmbed()
-            .addFields([
-                { name: 'Guild Name', value: `${guild.name}`, inline: true },
-                { name: 'Guild ID', value: `\`${guild.id}\``, inline: true },
-                { name: 'Guild Membercount', value: `${guild.memberCount}`, inline: true }
-            ]);
-        }
-        setType(type: 'CREATE' | 'DELETE' | 'DELETE_BLACKLIST' | 'DELETE_ROVER') {
-            if (type === 'CREATE') {
-                this.embed
-                    .setTitle('Guild Created')
-                    .setColor(Colors.getColor('green'))
-                    .setDescription('A guild has been created.');
-            } else if (type === 'DELETE') {
-                this.embed
-                    .setTitle('Guild Deleted')
-                    .setColor(Colors.getColor('red'))
-                    .setDescription('A guild has been deleted.');
-            } else if (type === 'DELETE_BLACKLIST') {
-                this.embed
-                    .setTitle('Guild Deleted')
-                    .setColor(Colors.getColor('black'))
-                    .setDescription('A **blacklisted** guild has been deleted.')
-            } else if (type === 'DELETE_ROVER') {
-                this.embed
-                    .setTitle('Guild Deleted')
-                    .setColor(Colors.getColor('red'))
-                    .setDescription('A guild has been deleted; **RoVer was not present.**');
-            }
-            return this;
-        }
-        async send() {
-            try {
-                try {
-                    await client.users.fetch(this.guild.ownerId).then(user => {
-                        this.embed.addFields({ name: 'Guild Owner Discord Account', value: `${user.username}${user.discriminator === '0' ? '' : `#${user.discriminator}`} / \`${user.id}\`` });
-                    }).catch(() => {
-                        this.embed.addFields({ name: 'Guild Owner Discord Account', value: `\`${this.guild.ownerId}\`` });
-                    })
-                } catch {}
-                try {
-                    const roverData = await GetRoVerLink(this.guild.id, this.guild.ownerId, redis);
-                    if (roverData) {
-                        this.embed.addFields({ name: 'Guild Owner Roblox Account', value: `${roverData.cachedUsername} / \`${roverData.robloxId}\``, inline: true });
-                    }
-                } catch {
-                    this.embed.addFields({ name: 'Guild Owner Roblox Account', value: 'Unavailable', inline: true })
-                }
-            } catch {}
-            const logChannel = client.guilds.cache.get(Constants.logs.guild_id)?.channels.cache.get(Constants.logs.guild_logs) as GuildTextBasedChannel | undefined;
-            if (logChannel) {
-                logChannel.send({ content: '@everyone', embeds: [ this.embed ] }).catch(() => {});
-            }
-        }
-    }
-
-    client.login(Constants.isProduction ? process.env.DISCORD_PRODUCTION_TOKEN : process.env.DISCORD_DEVELOPMENT_TOKEN)
-        .then(() => log('Logged into Discord. Awaiting ready...'))
-        .catch((error) => console.log(`[${Errors.Connection.Discord}]: Failed to log into Discord: ${error}`));
-
-    client.on('ready', () => {
-        log(`Logged into Discord as ${client.user!.tag} (${client.user!.id})`);
-        log(`Registered ${client.guilds.cache.size} guilds`);
-        log(`Registered ${client.users.cache.size} users`);
-
-        client.user!.setPresence(Constants.presenceData);
-
-        setInterval(() => {
-            for (const guild of client.guilds.cache.values()) {
-                GetGuildData(client, guild.id).then(guildData => {
-                    if (guildData.blacklist.status) {
-                        console.log(`Left blacklisted guild: ${guild.name} (${guild.id})`);
-                        temporaryIgnoreGuilds.add(guild.id);
-                        guild.leave().then(() => new GuildNotification(client, guild).setType('DELETE_BLACKLIST').send());
-                        return;
-                    }
-                }).catch(() => {});
-            }
-        }, Constants.userRefreshMs);
-    });
     
-    const temporaryIgnoreGuilds = new Set<string>();
-    client.on('guildCreate', guild => {
-        GetGuildData(client, guild.id).then(async guildData => {
-            if (guildData.blacklist.status) {
-                console.log(`Left blacklisted guild: ${guild.name} (${guild.id})`);
-                temporaryIgnoreGuilds.add(guild.id);
-                guild.leave().then(() => new GuildNotification(client, guild).setType('DELETE_BLACKLIST').send())
-                return;
+    try {
+        log(`Connecting to database...`);
+        await dbConnect();
+        log('Connected to database. Logging into Discord...');
+
+        class GuildNotification {
+            client: GClient;
+            guild: Guild;
+            embed: MessageEmbed;
+            constructor(client: GClient, guild: Guild) {
+                this.client = client;
+                this.guild = guild;
+                this.embed = new MessageEmbed()
+                .addFields([
+                    { name: 'Guild Name', value: `${guild.name}`, inline: true },
+                    { name: 'Guild ID', value: `\`${guild.id}\``, inline: true },
+                    { name: 'Guild Membercount', value: `${guild.memberCount}`, inline: true }
+                ]);
             }
-            if (!guild.members.cache.has(Constants.RoVer_Bot_ID)) {
-                console.log(`Left non-RoVer guild: ${guild.name} (${guild.id})`);
-                temporaryIgnoreGuilds.add(guild.id);
-                await guild.members.fetch(guild.ownerId)
-                    .then(async member => {
-                        try {
-                            await member.send(oneLine`
-                            mayLOG was added to your server \`${guild.name}\` (\`${guild.id}\`) but requires RoVer to be present in the server.
-                            Please add RoVer at https://rover.link/ and then re-invite mayLOG to your server.`)
-                        } catch {}
-                    }).catch(() => {});
-                guild.leave().then(() => new GuildNotification(client, guild).setType('DELETE_ROVER').send()).catch(() => {});
-                return;
+            setType(type: 'CREATE' | 'DELETE' | 'DELETE_BLACKLIST' | 'DELETE_ROVER') {
+                if (type === 'CREATE') {
+                    this.embed
+                        .setTitle('Guild Created')
+                        .setColor(Colors.getColor('green'))
+                        .setDescription('A guild has been created.');
+                } else if (type === 'DELETE') {
+                    this.embed
+                        .setTitle('Guild Deleted')
+                        .setColor(Colors.getColor('red'))
+                        .setDescription('A guild has been deleted.');
+                } else if (type === 'DELETE_BLACKLIST') {
+                    this.embed
+                        .setTitle('Guild Deleted')
+                        .setColor(Colors.getColor('black'))
+                        .setDescription('A **blacklisted** guild has been deleted.')
+                } else if (type === 'DELETE_ROVER') {
+                    this.embed
+                        .setTitle('Guild Deleted')
+                        .setColor(Colors.getColor('red'))
+                        .setDescription('A guild has been deleted; **RoVer was not present.**');
+                }
+                return this;
             }
-            console.log(`Created new guild: ${guild.name} (${guild.id})`);
-            new GuildNotification(client, guild).setType('CREATE').send();
-        }).catch(() => {});
-    });
-
-    client.on('guildDelete', guild => {
-        if (temporaryIgnoreGuilds.has(guild.id)) {
-            temporaryIgnoreGuilds.delete(guild.id);
-            return;
-        }
-        new GuildNotification(client, guild).setType('DELETE').send();
-    });
-
-    setInterval(async () => {
-        const guilds = (await mongo.db('maylog')
-            .collection('guilds').find<GuildData>({})
-            .toArray()).filter(g => (g.config.activityLogs && g.config.activityLogs.enabled));
-        if (guilds.length === 0) return;
-
-        guilds.forEach(async guild => {
-            activityManager.createCycle(guild, true).then(cycle => {
-                activityManager.submitCycle(cycle).catch(error => {
-                    Sentry.captureException(error);
-                });
-            }).catch(error => {
-                if (error === 'DATE_ERROR') return;
-                if (error === 'ACTIVITY_NOT_ENABLED') return;
-                if (error === 'INVALID_CYCLE') return;
-                Sentry.captureException(error);
-            });
-        });
-    }, 5000);
-
-    setInterval(async () => {
-        try {
-            const keys = await redis.keys(`${Constants.redisKeys.logs}/*`);
-            if (keys.length === 0) return;
-            const results = await redis.mget(...keys);
-            results.forEach(async key => {
-                if (!key) return;
-                const json = JSON.parse(key);
-                const status = await activityManager.getIngameLogStatus(json.robloxId);
-                if (!status) return;
-                const Server = await ActivityAPI.GetPlayerServer(status.robloxId);
-                const guildData = await GetGuildData(client, status.guildId);
-                const team = guildData.config.activityLogs.team;
-
-                if (Date.now() >= json.lastKeepAlivePing + Constants.ActivityLogGracePeriod) {
+            async send() {
+                try {
                     try {
-                        const guild = client.guilds.cache.get(guildData._id);
-                        if (!guild) return;
-                        const member = guild.members.cache.find(m => m.id === status.discordId);
-                        if (!member) return;
-                        const quota = activityManager.getQuotaForMember(guildData, member);
-                        if (!quota) return;
-                        const isValid = status.duration >= quota.time
-                        await activityManager.endIngameLog(json.robloxId, status, !isValid);
+                        await client.users.fetch(this.guild.ownerId).then(user => {
+                            this.embed.addFields({ name: 'Guild Owner Discord Account', value: `${user.username}${user.discriminator === '0' ? '' : `#${user.discriminator}`} / \`${user.id}\`` });
+                        }).catch(() => {
+                            this.embed.addFields({ name: 'Guild Owner Discord Account', value: `\`${this.guild.ownerId}\`` });
+                        })
+                    } catch {}
+                    try {
+                        const roverData = await GetRoVerLink(this.guild.id, this.guild.ownerId, redis);
+                        if (roverData) {
+                            this.embed.addFields({ name: 'Guild Owner Roblox Account', value: `${roverData.cachedUsername} / \`${roverData.robloxId}\``, inline: true });
+                        }
+                    } catch {
+                        this.embed.addFields({ name: 'Guild Owner Roblox Account', value: 'Unavailable', inline: true })
+                    }
+                } catch {}
+                const logChannel = client.guilds.cache.get(Constants.logs.guild_id)?.channels.cache.get(Constants.logs.guild_logs) as GuildTextBasedChannel | undefined;
+                if (logChannel) {
+                    logChannel.send({ content: '@everyone', embeds: [ this.embed ] }).catch(() => {});
+                }
+            }
+        }
+
+        await client.login(Constants.isProduction ? process.env.DISCORD_PRODUCTION_TOKEN : process.env.DISCORD_DEVELOPMENT_TOKEN)
+            .then(() => log('Logged into Discord. Awaiting ready...'))
+            .catch((error) => {
+                console.error(`[${Errors.Connection.Discord}]: Failed to log into Discord:`, error);
+                process.exit(1); // Exit with error code instead of continuing
+            });
+
+        client.on('ready', () => {
+            log(`Logged into Discord as ${client.user!.tag} (${client.user!.id})`);
+            log(`Registered ${client.guilds.cache.size} guilds`);
+            log(`Registered ${client.users.cache.size} users`);
+
+            client.user!.setPresence(Constants.presenceData);
+
+            setInterval(() => {
+                for (const guild of client.guilds.cache.values()) {
+                    GetGuildData(client, guild.id).then(guildData => {
+                        if (guildData.blacklist.status) {
+                            console.log(`Left blacklisted guild: ${guild.name} (${guild.id})`);
+                            temporaryIgnoreGuilds.add(guild.id);
+                            guild.leave().then(() => new GuildNotification(client, guild).setType('DELETE_BLACKLIST').send());
+                            return;
+                        }
+                    }).catch(() => {});
+                }
+            }, Constants.userRefreshMs);
+        });
+        
+        const temporaryIgnoreGuilds = new Set<string>();
+        client.on('guildCreate', guild => {
+            GetGuildData(client, guild.id).then(async guildData => {
+                if (guildData.blacklist.status) {
+                    console.log(`Left blacklisted guild: ${guild.name} (${guild.id})`);
+                    temporaryIgnoreGuilds.add(guild.id);
+                    guild.leave().then(() => new GuildNotification(client, guild).setType('DELETE_BLACKLIST').send())
+                    return;
+                }
+                if (!guild.members.cache.has(Constants.RoVer_Bot_ID)) {
+                    console.log(`Left non-RoVer guild: ${guild.name} (${guild.id})`);
+                    temporaryIgnoreGuilds.add(guild.id);
+                    await guild.members.fetch(guild.ownerId)
+                        .then(async member => {
+                            try {
+                                await member.send(oneLine`
+                                mayLOG was added to your server \`${guild.name}\` (\`${guild.id}\`) but requires RoVer to be present in the server.
+                                Please add RoVer at https://rover.link/ and then re-invite mayLOG to your server.`)
+                            } catch {}
+                        }).catch(() => {});
+                    guild.leave().then(() => new GuildNotification(client, guild).setType('DELETE_ROVER').send()).catch(() => {});
+                    return;
+                }
+                console.log(`Created new guild: ${guild.name} (${guild.id})`);
+                new GuildNotification(client, guild).setType('CREATE').send();
+            }).catch(() => {});
+        });
+
+        client.on('guildDelete', guild => {
+            if (temporaryIgnoreGuilds.has(guild.id)) {
+                temporaryIgnoreGuilds.delete(guild.id);
+                return;
+            }
+            new GuildNotification(client, guild).setType('DELETE').send();
+        });
+
+        setInterval(async () => {
+            try {
+                const guilds = (await mongo.db('maylog')
+                    .collection('guilds').find<GuildData>({})
+                    .toArray()).filter(g => (g.config.activityLogs && g.config.activityLogs.enabled));
+                
+                if (guilds.length === 0) return;
+
+                console.log(`Processing ${guilds.length} guilds for activity logs`);
+                
+                guilds.forEach(async guild => {
+                    try {
+                        const cycle = await activityManager.createCycle(guild, true);
+                        await activityManager.submitCycle(cycle);
                     } catch (error) {
+                        if (error === 'DATE_ERROR') return;
+                        if (error === 'ACTIVITY_NOT_ENABLED') return;
+                        if (error === 'INVALID_CYCLE') return;
+                        console.error('Error in guild activity cycle:', error);
                         Sentry.captureException(error);
                     }
-                } else {
-                    if (!Server) return;
-                    if (team !== Server.player.team) return;
-                    if (!status.serverId) return;
-                    json.lastKeepAlivePing = Date.now();
-                    redis.psetex(`${Constants.redisKeys.logs}/${json.robloxId}`, 3600 * 6 * 1000, JSON.stringify(json));
-                }
-            });
-        } catch (error) {
-            Sentry.captureException(error);
-        }
-    }, 5000);
-})();
+                });
+            } catch (error) {
+                console.error('Error in activity management interval:', error);
+                Sentry.captureException(error);
+            }
+        }, 5000);
+
+        setInterval(async () => {
+            try {
+                const keys = await redis.keys(`${Constants.redisKeys.logs}/*`);
+                if (keys.length === 0) return;
+                const results = await redis.mget(...keys);
+                results.forEach(async key => {
+                    if (!key) return;
+                    const json = JSON.parse(key);
+                    const status = await activityManager.getIngameLogStatus(json.robloxId);
+                    if (!status) return;
+                    const Server = await ActivityAPI.GetPlayerServer(status.robloxId);
+                    const guildData = await GetGuildData(client, status.guildId);
+                    const team = guildData.config.activityLogs.team;
+
+                    if (Date.now() >= json.lastKeepAlivePing + Constants.ActivityLogGracePeriod) {
+                        try {
+                            const guild = client.guilds.cache.get(guildData._id);
+                            if (!guild) return;
+                            const member = guild.members.cache.find(m => m.id === status.discordId);
+                            if (!member) return;
+                            const quota = activityManager.getQuotaForMember(guildData, member);
+                            if (!quota) return;
+                            const isValid = status.duration >= quota.time
+                            await activityManager.endIngameLog(json.robloxId, status, !isValid);
+                        } catch (error) {
+                            Sentry.captureException(error);
+                        }
+                    } else {
+                        if (!Server) return;
+                        if (team !== Server.player.team) return;
+                        if (!status.serverId) return;
+                        json.lastKeepAlivePing = Date.now();
+                        redis.psetex(`${Constants.redisKeys.logs}/${json.robloxId}`, 3600 * 6 * 1000, JSON.stringify(json));
+                    }
+                });
+            } catch (error) {
+                Sentry.captureException(error);
+            }
+        }, 5000);
+
+        // Add process event handlers to prevent unexpected exits
+        process.on('SIGINT', () => {
+            console.log('\nReceived SIGINT. Shutting down gracefully...');
+            client.destroy();
+            mongo.close();
+            redis.disconnect();
+            process.exit(0);
+        });
+
+        process.on('SIGTERM', () => {
+            console.log('\nReceived SIGTERM. Shutting down gracefully...');
+            client.destroy();
+            mongo.close();
+            redis.disconnect();
+            process.exit(0);
+        });
+
+    } catch (error) {
+        console.error('Fatal error in main execution:', error);
+        process.exit(1);
+    }
+})().catch(error => {
+    console.error('Unhandled error in main async function:', error);
+    process.exit(1);
+});
 
 process.on('uncaughtException', error => {
     console.log(`Uncaught exception: ${error}`);
