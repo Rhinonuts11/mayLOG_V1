@@ -1,6 +1,6 @@
 import { ActivityManager } from './Activity';
 import { Colors, GetGuildData, GetRoVerLink } from './util';
-import { Errors } from './Enums'
+import { Errors } from './Enums';
 import { GClient, Logger, MessageEmbed } from 'gcommands';
 import { Guild, GuildTextBasedChannel } from 'discord.js';
 import { GuildData } from './global';
@@ -11,8 +11,7 @@ import * as Sentry from '@sentry/node';
 import chalk from 'chalk';
 import Constants from './Constants';
 import dotenv from 'dotenv';
-import ActivityAPI from './ActivityAPI';
-import Redis from 'ioredis';
+
 dotenv.config();
 
 // Check required environment variables
@@ -30,12 +29,14 @@ requiredEnvVars.forEach(varName => {
 });
 
 const mongo = new MongoClient(process.env.MONGO_URI as string, {
-    serverSelectionTimeoutMS: 5000, // 5 second timeout
-    connectTimeoutMS: 10000, // 10 second timeout
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 10000,
     socketTimeoutMS: 10000,
 });
+
 const redis = new Redis(process.env.REDIS_URL as string);
 const activityManager = new ActivityManager(mongo, redis);
+
 const client = new GClient({
     dirs: [
         join(__dirname, 'commands'),
@@ -45,49 +46,39 @@ const client = new GClient({
     ],
     devGuildId: Constants.isProduction ? undefined : Constants.developerGuildId,
     intents: Constants.intents,
-    database: { mongo: mongo, redis: redis, activityManager: activityManager }
+    database: { mongo, redis, activityManager }
 });
-if (Constants.isProduction) Sentry.init({ dsn: process.env.SENTRY_DSN });
+
+if (Constants.isProduction) {
+    Sentry.init({ dsn: process.env.SENTRY_DSN });
+}
+
 activityManager.setClient(client);
 Logger.setLevel(Logger.TRACE);
 
 async function dbConnect(): Promise<void> {
     try {
         console.log('Connecting to MongoDB...');
-        console.log('MongoDB URI:', process.env.MONGO_URI ? 'Set' : 'Not set');
-        
-        // Add timeout wrapper for MongoDB connection
-        const mongoConnectPromise = mongo.connect();
-        const mongoTimeout = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('MongoDB connection timeout')), 10000)
-        );
-        
-        await Promise.race([mongoConnectPromise, mongoTimeout]);
+        await Promise.race([
+            mongo.connect(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('MongoDB connection timeout')), 10000))
+        ]);
         console.log('MongoDB connected successfully');
-        
-        // Test the connection
         await mongo.db('maylog').admin().ping();
         console.log('MongoDB ping successful');
-        
+
         console.log('Connecting to Redis...');
-        console.log('Redis URL:', process.env.REDIS_URL ? 'Set' : 'Not set');
-        
-        // Add timeout wrapper for Redis connection
-        const redisConnectPromise = redis.connect();
-        const redisTimeout = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Redis connection timeout')), 10000)
-        );
-        
-        await Promise.race([redisConnectPromise, redisTimeout]);
+        await Promise.race([
+            redis.connect(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Redis connection timeout')), 10000))
+        ]);
         console.log('Redis connected successfully');
-        
-        // Test Redis connection
         await redis.ping();
         console.log('Redis ping successful');
-        
-        redis.on('error', (error: Error) => {
+
+        redis.on('error', (error) => {
             if (error.message.includes('ECONNRESET')) return;
-            console.log(`Redis error:`, error);
+            console.error('Redis error:', error);
         });
 
         redis.on('connect', () => {
@@ -97,116 +88,115 @@ async function dbConnect(): Promise<void> {
         redis.on('close', () => {
             console.log('Redis connection closed');
         });
-        
+
+        setInterval(() => {
+            redis.ping().catch(error => console.error('Redis ping failed:', error));
+        }, 15000);
+
     } catch (error) {
-        console.error(`Failed to connect to database:`, error);
-        console.error('Error details:', error);
-        
-        // Check if MongoDB/Redis services are running
-        if (error instanceof Error) {
-            if (error.message.includes('timeout') || error.message.includes('ECONNREFUSED')) {
-                console.error('');
-                console.error('🚨 DATABASE CONNECTION FAILED:');
-                console.error('Make sure MongoDB and Redis are running:');
-                console.error('  MongoDB: mongosh (to test connection)');
-                console.error('  Redis: redis-cli ping (should return PONG)');
-                console.error('');
-            }
+        console.error('Failed to connect to database:', error);
+        if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('ECONNREFUSED'))) {
+            console.error('🚨 DATABASE CONNECTION FAILED:');
+            console.error('Make sure MongoDB and Redis are running:');
+            console.error('  MongoDB: mongosh (to test connection)');
+            console.error('  Redis: redis-cli ping (should return PONG)');
         }
-        
-        throw error; // Re-throw to be caught by main function
+        throw error;
+    }
+}
+
+class GuildNotification {
+    client: GClient;
+    guild: Guild;
+    embed: MessageEmbed;
+
+    constructor(client: GClient, guild: Guild) {
+        this.client = client;
+        this.guild = guild;
+        this.embed = new MessageEmbed()
+            .addFields([
+                { name: 'Guild Name', value: guild.name, inline: true },
+                { name: 'Guild ID', value: `\`${guild.id}\``, inline: true },
+                { name: 'Guild Membercount', value: `${guild.memberCount}`, inline: true }
+            ]);
     }
 
-    // Keep the ping interval
-    setInterval(() => {
-        try {
-            redis.ping();
-        } catch (error) {
-            console.log('Redis ping failed:', error);
-        }
-    }, 15000);
+    setType(type: 'CREATE' | 'DELETE' | 'DELETE_BLACKLIST' | 'DELETE_ROVER') {
+        const colorMap = {
+            'CREATE': 'green',
+            'DELETE': 'red',
+            'DELETE_BLACKLIST': 'black',
+            'DELETE_ROVER': 'red'
+        };
+        const descriptionMap = {
+            'CREATE': 'A guild has been created.',
+            'DELETE': 'A guild has been deleted.',
+            'DELETE_BLACKLIST': 'A **blacklisted** guild has been deleted.',
+            'DELETE_ROVER': 'A guild has been deleted; **RoVer was not present.**'
+        };
 
-    return Promise.resolve();
+        this.embed
+            .setTitle(`${type === 'CREATE' ? 'Guild Created' : 'Guild Deleted'}`)
+            .setColor(Colors.getColor(colorMap[type]))
+            .setDescription(descriptionMap[type]);
+
+        return this;
+    }
+
+    async send() {
+        try {
+            try {
+                const owner = await client.users.fetch(this.guild.ownerId);
+                this.embed.addFields({
+                    name: 'Guild Owner Discord Account',
+                    value: `${owner.username}${owner.discriminator === '0' ? '' : `#${owner.discriminator}`} / \`${owner.id}\``
+                });
+            } catch {
+                this.embed.addFields({
+                    name: 'Guild Owner Discord Account',
+                    value: `\`${this.guild.ownerId}\``
+                });
+            }
+
+            try {
+                const roverData = await GetRoVerLink(this.guild.id, this.guild.ownerId, redis);
+                if (roverData) {
+                    this.embed.addFields({
+                        name: 'Guild Owner Roblox Account',
+                        value: `${roverData.cachedUsername} / \`${roverData.robloxId}\``,
+                        inline: true
+                    });
+                }
+            } catch {
+                this.embed.addFields({
+                    name: 'Guild Owner Roblox Account',
+                    value: 'Unavailable',
+                    inline: true
+                });
+            }
+
+            const logChannel = client.guilds.cache.get(Constants.logs.guild_id)?.channels.cache.get(Constants.logs.guild_logs) as GuildTextBasedChannel | undefined;
+            if (logChannel) {
+                logChannel.send({ content: '@everyone', embeds: [this.embed] }).catch(console.error);
+            }
+        } catch (error) {
+            console.error('Error sending guild notification:', error);
+        }
+    }
 }
 
 (async () => {
     const log = (message: string) => console.log(`${chalk.green('[INFO]')}: ${message}.`);
-    
+
     try {
         console.log('Starting bot initialization...');
-        log(`Connecting to database...`);
-        
+        log('Connecting to database...');
         await dbConnect();
+
         log('Connected to database. Logging into Discord...');
-        
         console.log('Environment check:');
         console.log('- isProduction:', Constants.isProduction);
-        console.log('- Token available:', Constants.isProduction ? 
-            (process.env.DISCORD_PRODUCTION_TOKEN ? 'Yes' : 'No') : 
-            (process.env.DISCORD_DEVELOPMENT_TOKEN ? 'Yes' : 'No'));
-
-        class GuildNotification {
-            client: GClient;
-            guild: Guild;
-            embed: MessageEmbed;
-            constructor(client: GClient, guild: Guild) {
-                this.client = client;
-                this.guild = guild;
-                this.embed = new MessageEmbed()
-                .addFields([
-                    { name: 'Guild Name', value: `${guild.name}`, inline: true },
-                    { name: 'Guild ID', value: `\`${guild.id}\``, inline: true },
-                    { name: 'Guild Membercount', value: `${guild.memberCount}`, inline: true }
-                ]);
-            }
-            setType(type: 'CREATE' | 'DELETE' | 'DELETE_BLACKLIST' | 'DELETE_ROVER') {
-                if (type === 'CREATE') {
-                    this.embed
-                        .setTitle('Guild Created')
-                        .setColor(Colors.getColor('green'))
-                        .setDescription('A guild has been created.');
-                } else if (type === 'DELETE') {
-                    this.embed
-                        .setTitle('Guild Deleted')
-                        .setColor(Colors.getColor('red'))
-                        .setDescription('A guild has been deleted.');
-                } else if (type === 'DELETE_BLACKLIST') {
-                    this.embed
-                        .setTitle('Guild Deleted')
-                        .setColor(Colors.getColor('black'))
-                        .setDescription('A **blacklisted** guild has been deleted.')
-                } else if (type === 'DELETE_ROVER') {
-                    this.embed
-                        .setTitle('Guild Deleted')
-                        .setColor(Colors.getColor('red'))
-                        .setDescription('A guild has been deleted; **RoVer was not present.**');
-                }
-                return this;
-            }
-            async send() {
-                try {
-                    try {
-                        await client.users.fetch(this.guild.ownerId).then(user => {
-                            this.embed.addFields({ name: 'Guild Owner Discord Account', value: `${user.username}${user.discriminator === '0' ? '' : `#${user.discriminator}`} / \`${user.id}\`` });
-                        }).catch(() => {
-                            this.embed.addFields({ name: 'Guild Owner Discord Account', value: `\`${this.guild.ownerId}\`` });
-                        })
-                    } catch {}
-                    try {
-                        const roverData = await GetRoVerLink(this.guild.id, this.guild.ownerId, redis);
-                        if (roverData) {
-                            this.embed.addFields({ name: 'Guild Owner Roblox Account', value: `${roverData.cachedUsername} / \`${roverData.robloxId}\``, inline: true });
-                        }
-                    } catch {
-                        this.embed.addFields({ name: 'Guild Owner Roblox Account', value: 'Unavailable', inline: true })
-                    }
-                } catch {}
-                const logChannel = client.guilds.cache.get(Constants.logs.guild_id)?.channels.cache.get(Constants.logs.guild_logs) as GuildTextBasedChannel | undefined;
-                if (logChannel) {
-                    logChannel.send({ content: '@everyone', embeds: [ this.embed ] }).catch(() => {});
-                }
-            }
-        }
+        console.log('- Token available:', Constants.isProduction ? (process.env.DISCORD_PRODUCTION_TOKEN ? 'Yes' : 'No') : (process.env.DISCORD_DEVELOPMENT_TOKEN ? 'Yes' : 'No'));
 
         console.log('Attempting Discord login...');
         await client.login(Constants.isProduction ? process.env.DISCORD_PRODUCTION_TOKEN : process.env.DISCORD_DEVELOPMENT_TOKEN)
@@ -216,59 +206,58 @@ async function dbConnect(): Promise<void> {
             })
             .catch((error) => {
                 console.error(`[${Errors.Connection.Discord}]: Failed to log into Discord:`, error);
-                console.error('Login error details:', error.message);
-                process.exit(1); // Exit with error code instead of continuing
+                process.exit(1);
             });
 
         console.log('Setting up event listeners...');
-
         client.on('ready', () => {
             log(`Logged into Discord as ${client.user!.tag} (${client.user!.id})`);
             log(`Registered ${client.guilds.cache.size} guilds`);
             log(`Registered ${client.users.cache.size} users`);
-
             client.user!.setPresence(Constants.presenceData);
 
             setInterval(() => {
-                for (const guild of client.guilds.cache.values()) {
+                client.guilds.cache.forEach(guild => {
                     GetGuildData(client, guild.id).then(guildData => {
                         if (guildData.blacklist.status) {
                             console.log(`Left blacklisted guild: ${guild.name} (${guild.id})`);
                             temporaryIgnoreGuilds.add(guild.id);
                             guild.leave().then(() => new GuildNotification(client, guild).setType('DELETE_BLACKLIST').send());
-                            return;
                         }
-                    }).catch(() => {});
-                }
+                    }).catch(console.error);
+                });
             }, Constants.userRefreshMs);
         });
-        
+
         const temporaryIgnoreGuilds = new Set<string>();
+
         client.on('guildCreate', guild => {
             GetGuildData(client, guild.id).then(async guildData => {
                 if (guildData.blacklist.status) {
                     console.log(`Left blacklisted guild: ${guild.name} (${guild.id})`);
                     temporaryIgnoreGuilds.add(guild.id);
-                    guild.leave().then(() => new GuildNotification(client, guild).setType('DELETE_BLACKLIST').send())
+                    guild.leave().then(() => new GuildNotification(client, guild).setType('DELETE_BLACKLIST').send());
                     return;
                 }
+
                 if (!guild.members.cache.has(Constants.RoVer_Bot_ID)) {
                     console.log(`Left non-RoVer guild: ${guild.name} (${guild.id})`);
                     temporaryIgnoreGuilds.add(guild.id);
-                    await guild.members.fetch(guild.ownerId)
-                        .then(async member => {
-                            try {
-                                await member.send(oneLine`
-                                mayLOG was added to your server \`${guild.name}\` (\`${guild.id}\`) but requires RoVer to be present in the server.
-                                Please add RoVer at https://rover.link/ and then re-invite mayLOG to your server.`)
-                            } catch {}
-                        }).catch(() => {});
-                    guild.leave().then(() => new GuildNotification(client, guild).setType('DELETE_ROVER').send()).catch(() => {});
+                    try {
+                        const owner = await guild.members.fetch(guild.ownerId);
+                        await owner.send(oneLine`
+                            mayLOG was added to your server \`${guild.name}\` (\`${guild.id}\`) but requires RoVer to be present in the server.
+                            Please add RoVer at https://rover.link/ and then re-invite mayLOG to your server.`);
+                    } catch (error) {
+                        console.error('Failed to send message to guild owner:', error);
+                    }
+                    guild.leave().then(() => new GuildNotification(client, guild).setType('DELETE_ROVER').send()).catch(console.error);
                     return;
                 }
+
                 console.log(`Created new guild: ${guild.name} (${guild.id})`);
                 new GuildNotification(client, guild).setType('CREATE').send();
-            }).catch(() => {});
+            }).catch(console.error);
         });
 
         client.on('guildDelete', guild => {
@@ -281,26 +270,22 @@ async function dbConnect(): Promise<void> {
 
         setInterval(async () => {
             try {
-                const guilds = (await mongo.db('maylog')
-                    .collection('guilds').find<GuildData>({})
-                    .toArray()).filter(g => (g.config.activityLogs && g.config.activityLogs.enabled));
-                
-                if (guilds.length === 0) return;
+                const guilds = (await mongo.db('maylog').collection('guilds').find<GuildData>({}).toArray())
+                    .filter(g => g.config.activityLogs && g.config.activityLogs.enabled);
 
+                if (guilds.length === 0) return;
                 console.log(`Processing ${guilds.length} guilds for activity logs`);
-                
-                guilds.forEach(async guild => {
+
+                await Promise.all(guilds.map(async guild => {
                     try {
                         const cycle = await activityManager.createCycle(guild, true);
                         await activityManager.submitCycle(cycle);
                     } catch (error) {
-                        if (error === 'DATE_ERROR') return;
-                        if (error === 'ACTIVITY_NOT_ENABLED') return;
-                        if (error === 'INVALID_CYCLE') return;
+                        if (['DATE_ERROR', 'ACTIVITY_NOT_ENABLED', 'INVALID_CYCLE'].includes(error)) return;
                         console.error('Error in guild activity cycle:', error);
                         Sentry.captureException(error);
                     }
-                });
+                }));
             } catch (error) {
                 console.error('Error in activity management interval:', error);
                 Sentry.captureException(error);
@@ -312,11 +297,13 @@ async function dbConnect(): Promise<void> {
                 const keys = await redis.keys(`${Constants.redisKeys.logs}/*`);
                 if (keys.length === 0) return;
                 const results = await redis.mget(...keys);
-                results.forEach(async key => {
+
+                await Promise.all(results.map(async key => {
                     if (!key) return;
                     const json = JSON.parse(key);
                     const status = await activityManager.getIngameLogStatus(json.robloxId);
                     if (!status) return;
+
                     const Server = await ActivityAPI.GetPlayerServer(status.robloxId);
                     const guildData = await GetGuildData(client, status.guildId);
                     const team = guildData.config.activityLogs.team;
@@ -329,25 +316,22 @@ async function dbConnect(): Promise<void> {
                             if (!member) return;
                             const quota = activityManager.getQuotaForMember(guildData, member);
                             if (!quota) return;
-                            const isValid = status.duration >= quota.time
+                            const isValid = status.duration >= quota.time;
                             await activityManager.endIngameLog(json.robloxId, status, !isValid);
                         } catch (error) {
                             Sentry.captureException(error);
                         }
                     } else {
-                        if (!Server) return;
-                        if (team !== Server.player.team) return;
-                        if (!status.serverId) return;
+                        if (!Server || team !== Server.player.team || !status.serverId) return;
                         json.lastKeepAlivePing = Date.now();
-                        redis.psetex(`${Constants.redisKeys.logs}/${json.robloxId}`, 3600 * 6 * 1000, JSON.stringify(json));
+                        await redis.psetex(`${Constants.redisKeys.logs}/${json.robloxId}`, 3600 * 6 * 1000, JSON.stringify(json));
                     }
-                });
+                }));
             } catch (error) {
                 Sentry.captureException(error);
             }
         }, 5000);
 
-        // Add process event handlers to prevent unexpected exits
         process.on('SIGINT', () => {
             console.log('\nReceived SIGINT. Shutting down gracefully...');
             client.destroy();
@@ -368,14 +352,12 @@ async function dbConnect(): Promise<void> {
         console.error('Fatal error in main execution:', error);
         process.exit(1);
     }
-})().catch(error => {
-    console.error('Unhandled error in main async function:', error);
-    process.exit(1);
-});
+})();
 
 process.on('uncaughtException', error => {
-    console.log(`Uncaught exception: ${error}`);
+    console.error('Uncaught exception:', error);
 });
+
 process.on('unhandledRejection', error => {
-    console.log(`Unhandled rejection: ${error}`);
+    console.error('Unhandled rejection:', error);
 });
