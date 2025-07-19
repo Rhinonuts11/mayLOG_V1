@@ -12,7 +12,7 @@ declare global {
             /** MongoDB URI */
             MONGO_URI: string;
             /** Redis host (IP address) */
-            REDIS_HOST: string;
+            REDIS_URL: string;
             /** Redis password */
             REDIS_PASSWORD: string;
             /** API Token for Activity API access */
