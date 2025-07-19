@@ -1,6 +1,7 @@
 import { Colors, GetGuildData, GetRoVerLink, PrettyMilliseconds, SaveGuildData } from './util';
 import { Database, GuildData, ActivityQuota, IMActivityCycle, IActivityCycleSkippedUser } from './global';
-import { DateTime } from 'luxon';
+import luxon from 'luxon';
+const { DateTime } = luxon;
 import { GClient } from 'gcommands';
 import { GuildMember, MessageEmbed, TextChannel } from 'discord.js';
 import { MongoClient, ObjectId, UpdateResult } from 'mongodb';
